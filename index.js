@@ -1224,7 +1224,16 @@ function createBot() {
     });
 
     bot.loadPlugin(pathfinder);
+    // Handle resource-pack requests from the server
+    if (bot._client) {
+      bot._client.on("add_resource_pack", (packet) => {
+        addLog("[Bot] Server sent a resource-pack request.");
 
+        addLog(
+          `[Bot] Resource-pack URL received: ${packet.url ? "yes" : "no"}`
+        );
+      });
+    }
     // FIX: connection timeout - end the old bot before reconnecting to avoid ghost bots
     clearBotTimeouts();
     connectionTimeoutId = setTimeout(() => {
