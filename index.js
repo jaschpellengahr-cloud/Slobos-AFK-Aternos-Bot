@@ -1224,16 +1224,27 @@ function createBot() {
     });
 
     bot.loadPlugin(pathfinder);
-    // Handle resource-pack requests from the server
-    if (bot._client) {
-      bot._client.on("add_resource_pack", (packet) => {
-        addLog("[Bot] Server sent a resource-pack request.");
+   // Respond to the server's resource-pack request
+    bot._client.on("add_resource_pack", (packet) => {
+      addLog("[Bot] Resource-pack request received.");
 
-        addLog(
-          `[Bot] Resource-pack URL received: ${packet.url ? "yes" : "no"}`
-        );
-      });
-    }
+      try {
+        const response = {
+          result: 3, // ACCEPTED
+        };
+
+        if (packet.uuid !== undefined) {
+          response.uuid = String(packet.uuid);
+        }
+
+        bot._client.write("resource_pack_receive", response);
+
+        addLog("[Bot] Resource pack accepted.");
+      } catch (err) {
+        addLog(`[Bot] Resource-pack response failed: ${err.message}`);
+      }
+    });
+
     // FIX: connection timeout - end the old bot before reconnecting to avoid ghost bots
     clearBotTimeouts();
     connectionTimeoutId = setTimeout(() => {
