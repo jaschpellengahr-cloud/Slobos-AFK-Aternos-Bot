@@ -979,6 +979,8 @@ app.post("/start", (req, res) => {
   if (botRunning) return res.json({ success: false, msg: "Already running" });
 
   botRunning = true;
+  clearBotTimeouts();
+  isReconnecting = false;
   createBot();
   addLog("[Control] Bot started");
 
@@ -989,10 +991,18 @@ app.post("/stop", (req, res) => {
   if (!botRunning) return res.json({ success: false, msg: "Already stopped" });
 
   botRunning = false;
+  clearBotTimeouts();
+  isReconnecting = false;
 
   if (bot) {
-    bot.end();
+    const oldBot = bot;
     bot = null;
+    try {
+      oldBot.removeAllListeners("end");
+      oldBot.end();
+    } catch (e) {
+      addLog(`[Control] Error stopping bot: ${e.message}`);
+    }
   }
 
   clearAllIntervals();
@@ -1185,6 +1195,11 @@ function getReconnectDelay() {
 }
 
 function createBot() {
+  if (!botRunning) {
+    addLog("[Bot] Bot is manually stopped; skipping connection.");
+    return;
+  }
+
   if (isReconnecting) {
     addLog("[Bot] Already reconnecting, skipping...");
     return;
@@ -1263,7 +1278,7 @@ function createBot() {
           /* ignore */
         }
         bot = null;
-        scheduleReconnect();
+        if (botRunning) scheduleReconnect();
       }
     }, 150000); // 150s - Aternos servers can take 90-120s to finish spawning a player
 
@@ -1376,8 +1391,8 @@ function createBot() {
         );
       }
 
-      // ALWAYS reconnect — bot must never leave the server
-      scheduleReconnect();
+      // Reconnect after an unexpected disconnect, but respect the dashboard Stop button.
+      if (botRunning) scheduleReconnect();
     });
 
     bot.on("error", (err) => {
@@ -1388,12 +1403,18 @@ function createBot() {
     });
   } catch (err) {
     addLog(`[Bot] Failed to create bot: ${err.message}`);
-    scheduleReconnect();
+    if (botRunning) scheduleReconnect();
   }
 }
 
 function scheduleReconnect() {
   clearBotTimeouts();
+
+  if (!botRunning) {
+    addLog("[Bot] Manual stop is active; reconnect cancelled.");
+    isReconnecting = false;
+    return;
+  }
 
   // FIX: don't stack reconnect if already waiting
   if (isReconnecting) {
@@ -2043,12 +2064,14 @@ process.on("uncaughtException", (err) => {
     }
   }
 
-  setTimeout(
-    () => {
-      scheduleReconnect();
-    },
-    isNetworkError ? 5000 : 10000,
-  );
+  if (botRunning) {
+    setTimeout(
+      () => {
+        if (botRunning) scheduleReconnect();
+      },
+      isNetworkError ? 5000 : 10000,
+    );
+  }
 });
 
 process.on("unhandledRejection", (reason) => {
@@ -2067,7 +2090,7 @@ process.on("unhandledRejection", (reason) => {
     msg.includes("timed out") ||
     msg.includes("PartialReadError");
 
-  if (isNetworkError && !isReconnecting) {
+  if (botRunning && isNetworkError && !isReconnecting) {
     addLog("[FATAL] Network rejection — triggering reconnect...");
     clearAllIntervals();
     botState.connected = false;
@@ -2079,13 +2102,27 @@ process.on("unhandledRejection", (reason) => {
   }
 });
 
-process.on("SIGTERM", () => {
-  addLog("[System] SIGTERM received — ignoring, bot will stay alive.");
-});
+function gracefulShutdown(signal) {
+  addLog(`[System] ${signal} received — shutting down cleanly.`);
+  botRunning = false;
+  clearBotTimeouts();
+  clearAllIntervals();
+  if (bot) {
+    const oldBot = bot;
+    bot = null;
+    try {
+      oldBot.removeAllListeners("end");
+      oldBot.end();
+    } catch (e) {
+      addLog(`[System] Bot shutdown warning: ${e.message}`);
+    }
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 5000).unref();
+}
 
-process.on("SIGINT", () => {
-  addLog("[System] SIGINT received — ignoring, bot will stay alive.");
-});
+process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.once("SIGINT", () => gracefulShutdown("SIGINT"));
 
 // =============================
 //===============================
